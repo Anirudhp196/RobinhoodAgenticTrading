@@ -54,3 +54,25 @@ def save(name: str, payload: dict[str, Any]) -> None:
     with tmp.open("w") as f:
         json.dump(payload, f)
     tmp.replace(path)  # atomic on POSIX
+
+
+def append_score_history(scores_by_ticker: dict[str, float]) -> None:
+    """
+    Append today's scores to score_history.json. Idempotent for the same day —
+    if today's entry already exists for a ticker, it's overwritten (so a manual
+    refresh just updates today's record rather than duplicating it).
+    """
+    history = load("score_history") or {}
+    today = today_key()
+    for ticker, score in scores_by_ticker.items():
+        series = history.setdefault(ticker, [])
+        # remove any existing entry for today, then append
+        series = [e for e in series if e.get("date") != today]
+        series.append({"date": today, "score": score})
+        # keep last 365 entries to bound the file size
+        history[ticker] = series[-365:]
+    save("score_history", history)
+
+
+def load_score_history() -> dict[str, list[dict[str, Any]]]:
+    return load("score_history") or {}

@@ -107,10 +107,12 @@ def compute_quality_score(profit_margin: float | None) -> float | None:
     """
     if profit_margin is None:
         return None
+    if profit_margin < 0:
+        return 0.0  # unprofitable -> hard zero
     return _piecewise_linear(
         profit_margin,
-        [(-1.0, 0.0), (0.0, 0.10), (0.05, 0.40),
-         (0.15, 0.80), (0.25, 1.00), (1.0, 1.00)],
+        [(0.0, 0.10), (0.05, 0.40), (0.15, 0.80),
+         (0.25, 1.00), (1.0, 1.00)],
     )
 
 
@@ -153,7 +155,7 @@ def compute_rsi(closes: list[float], period: int = 14) -> float | None:
 def score_stock(
     stock: NormalizedStock,
     weights: dict[str, float],
-    risk_filters: dict[str, float],
+    filters: dict[str, float],
 ) -> Signal:
     """
     Combine component scores into a final 0-100 score plus reasons and flags.
@@ -193,7 +195,7 @@ def score_stock(
     }
 
     reasons = _build_reasons(stock, components, metrics)
-    flags = _build_flags(stock, rsi, risk_filters)
+    flags = _build_flags(stock, rsi, filters)
 
     return Signal(
         ticker=stock.ticker,
@@ -207,10 +209,10 @@ def score_stock(
 def score_universe(
     stocks: Iterable[NormalizedStock],
     weights: dict[str, float],
-    risk_filters: dict[str, float],
+    filters: dict[str, float],
 ) -> list[Signal]:
     """Score every stock, return list sorted by score descending."""
-    signals = [score_stock(s, weights, risk_filters) for s in stocks]
+    signals = [score_stock(s, weights, filters) for s in stocks]
     return sorted(signals, key=lambda s: s.score, reverse=True)
 
 
@@ -265,14 +267,14 @@ def _build_reasons(
 def _build_flags(
     stock: NormalizedStock,
     rsi: float | None,
-    risk_filters: dict[str, float],
+    filters: dict[str, float],
 ) -> list[str]:
     flags: list[str] = []
-    if rsi is not None and rsi > risk_filters.get("maxRsi", 75):
+    if rsi is not None and rsi > filters.get("maxRsi", 75):
         flags.append(f"overbought (RSI {rsi:.0f})")
-    if stock.pe is not None and stock.pe > risk_filters.get("maxPe", 60):
+    if stock.pe is not None and stock.pe > filters.get("maxPe", 60):
         flags.append(f"very expensive (P/E {stock.pe:.0f})")
-    if stock.market_cap is not None and stock.market_cap < risk_filters.get("minMarketCap", 2e9):
+    if stock.market_cap is not None and stock.market_cap < filters.get("minMarketCap", 2e9):
         flags.append("small cap")
     return flags
 
