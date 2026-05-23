@@ -45,6 +45,17 @@ app.get("/api/screen/:ticker", async (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/discover", async (_req: Request, res: Response) => {
+  try {
+    // Discovery is slow on cold cache (yfinance per-ticker .info). Bump
+    // upstream timeout via no timeout (default fetch is unlimited in node 20).
+    const upstream = await fetch(`${SCORING_URL}/discover`);
+    res.status(upstream.status).json(await upstream.json());
+  } catch (err) {
+    res.status(502).json({ error: errMsg(err) });
+  }
+});
+
 app.post("/api/refresh", async (_req: Request, res: Response) => {
   try {
     const upstream = await fetch(`${SCORING_URL}/refresh`, { method: "POST" });

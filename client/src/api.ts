@@ -20,6 +20,28 @@ export async function refresh(): Promise<ScreenPayload> {
   return r.json();
 }
 
+export type DiscoveryEntry = import("./types").Signal & { last_scored: string };
+
+export type DiscoveryPayload = {
+  generated_at: string;
+  threshold: number;
+  universe_size: number;
+  scored_count: number;
+  qualifiers_count: number;
+  slice_today: number;
+  total_slices: number;
+  verdict: string;
+  entries: DiscoveryEntry[];
+};
+
+export async function getDiscovery(): Promise<DiscoveryPayload> {
+  // First call is slow (~5-8 min on cold cache). Browser fetch has no client
+  // timeout by default so this just waits.
+  const r = await fetch(`${BASE}/api/discover`);
+  if (!r.ok) throw new Error(`discover failed: ${r.status}`);
+  return r.json();
+}
+
 export type ProgressEvent =
   | { type: "start"; total: number }
   | { type: "progress"; done: number; total: number; ticker: string; score: number }

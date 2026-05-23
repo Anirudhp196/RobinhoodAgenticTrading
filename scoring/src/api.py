@@ -28,7 +28,15 @@ from .data_layer import (
     _normalize_raw_to_stock,
     fetch_universe,
 )
+from .discovery import (
+    SLICES,
+    get_all_discovery_signals,
+    run_rolling_scan,
+    today_slice_index,
+    todays_tickers,
+)
 from .signals import Signal, score_stock, score_universe
+from .sp500 import load_sp500
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -84,6 +92,58 @@ def screen_one(ticker: str) -> dict[str, Any]:
     return {
         "signal": signal.model_dump(),
         "history": history,
+    }
+
+
+@app.get("/discover")
+def discover() -> dict[str, Any]:
+    """
+    Rolling S&P 500 scan. Each call scores today's slice (~50 tickers) via FMP
+    and merges into a persistent discovery store. Returns the union of all
+    scored tickers, sorted by score. Full S&P 500 coverage takes ~10 days
+    to bootstrap.
+    """
+    cfg = load_config()
+    disc_cfg = cfg.get("discovery", {})
+    top_n = int(disc_cfg.get("topN", 15))
+    threshold = cfg.get("signalThreshold", 70)
+
+    # Run today's slice if we haven't already today.
+    store = cache.load("discovery_scores") or {}
+    universe = load_sp500()
+    if not universe:
+        raise HTTPException(status_code=502, detail="S&P 500 list unavailable")
+    slice_today = todays_tickers(universe)
+    today = cache.today_key()
+    already_done = all(
+        store.get(t, {}).get("last_scored") == today for t in slice_today
+    )
+    if not already_done:
+        run_rolling_scan(cfg["weights"], cfg["riskFilters"])
+
+    entries = get_all_discovery_signals()
+    qualifiers = [
+        e for e in entries
+        if e["signal"].get("error") is None and e["signal"].get("score", 0) >= threshold
+    ]
+    top = qualifiers[:top_n]
+    return {
+        "generated_at": today,
+        "threshold": threshold,
+        "universe_size": len(universe),
+        "scored_count": len(entries),
+        "qualifiers_count": len(qualifiers),
+        "slice_today": today_slice_index() + 1,
+        "total_slices": SLICES,
+        "verdict": (
+            f"{len(qualifiers)} of {len(entries)} scored names clear the bar — showing top {len(top)}"
+            if qualifiers
+            else f"Nothing in {len(entries)} scored names clears the bar. Hold."
+        ),
+        "entries": [
+            {**e["signal"], "last_scored": e["last_scored"]}
+            for e in top
+        ],
     }
 
 
