@@ -192,3 +192,31 @@ dl.metrics {
 dl.metrics dt { color: var(--muted); }
 dl.metrics dd { margin: 0; text-align: right; }
 .sparkline { background: #1a1f2e; border-radius: 6px; padding: 8px; width: 100%; }
+
+/* Market regime banner */
+.regime-banner {
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  border: 1px solid transparent;
+}
+.regime-bull {
+  background: #0e1f18;
+  color: #6ee7b7;
+  border-color: #1e4d3a;
+}
+.regime-bear {
+  background: #2a1212;
+  color: #fca5a5;
+  border-color: #7f1d1d;
+  font-weight: 500;
+}
+
+/* Metric value coloring in detail drawer */
+.metric-good { color: var(--pass); }
+.metric-warn { color: var(--mid); }
+.metric-hint { color: var(--muted); font-size: 12px; margin-left: 4px; }
+
+/* Staleness column in discovery table */
+.staleness { color: var(--muted); font-size: 12px; }

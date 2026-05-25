@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getDiscovery, getScreen, getTicker, refresh } from "./api";
 import type { DiscoveryEntry, DiscoveryPayload } from "./api";
-import type { ScreenPayload, Signal, TickerDetail } from "./types";
+import type { MarketRegime, ScreenPayload, Signal, TickerDetail } from "./types";
 
 type Mode = "watchlist" | "discovery";
 
@@ -153,6 +153,7 @@ function WatchlistView({
 
   return (
     <>
+      <RegimeBanner regime={data.market_regime} />
       <section className={`verdict verdict-${verdictTone}`}>
         <div className="verdict-headline">{data.verdict}</div>
         <div className="verdict-sub">
@@ -165,6 +166,24 @@ function WatchlistView({
         onSelect={onSelect}
       />
     </>
+  );
+}
+
+function RegimeBanner({ regime }: { regime?: MarketRegime }) {
+  if (!regime || regime.above_200ma === null || regime.above_200ma === undefined) {
+    return null;
+  }
+  if (regime.above_200ma) {
+    return (
+      <div className="regime-banner regime-bull">
+        SPY {fmt(regime.spy_price, 2, "$")} · 200-day MA {fmt(regime.spy_ma200, 2, "$")} · Market uptrend
+      </div>
+    );
+  }
+  return (
+    <div className="regime-banner regime-bear">
+      ⚠ SPY {fmt(regime.spy_price, 2, "$")} is below its 200-day MA ({fmt(regime.spy_ma200, 2, "$")}) — market in downtrend. Extra caution warranted.
+    </div>
   );
 }
 
@@ -396,6 +415,36 @@ function DetailDrawer({
             <dd>{fmt(s.metrics?.rsi, 1)}</dd>
             <dt>% off 52w high</dt>
             <dd>{fmtPct(s.metrics?.pct_from_high)}</dd>
+            {s.metrics?.peg_ratio != null && (
+              <>
+                <dt>PEG ratio</dt>
+                <dd className={s.metrics.peg_ratio < 1.0 ? "metric-good" : s.metrics.peg_ratio > 2.0 ? "metric-warn" : ""}>
+                  {fmt(s.metrics.peg_ratio, 2)}
+                  <span className="metric-hint">
+                    {s.metrics.peg_ratio < 1.0 ? " (cheap for growth)" : s.metrics.peg_ratio > 2.0 ? " (pricey for growth)" : " (fair)"}
+                  </span>
+                </dd>
+              </>
+            )}
+            {s.metrics?.eps_growth_rate != null && (
+              <>
+                <dt>EPS growth (YoY)</dt>
+                <dd className={s.metrics.eps_growth_rate > 0 ? "metric-good" : "metric-warn"}>
+                  {fmtPct(s.metrics.eps_growth_rate)}
+                </dd>
+              </>
+            )}
+            {s.metrics?.volume_ratio != null && (
+              <>
+                <dt>Volume (10d vs avg)</dt>
+                <dd className={s.metrics.volume_ratio < 0.8 ? "metric-good" : s.metrics.volume_ratio > 1.5 ? "metric-warn" : ""}>
+                  {fmt(s.metrics.volume_ratio, 2)}x
+                  <span className="metric-hint">
+                    {s.metrics.volume_ratio < 0.8 ? " (quiet — good)" : s.metrics.volume_ratio > 1.5 ? " (heavy selling)" : ""}
+                  </span>
+                </dd>
+              </>
+            )}
           </dl>
         </section>
         {history.length > 1 && (

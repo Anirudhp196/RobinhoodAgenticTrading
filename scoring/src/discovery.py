@@ -63,8 +63,8 @@ def run_rolling_scan(
     slice_tickers = todays_tickers(universe)
     log.info("discovery slice %d/%d: %d tickers", today_slice_index() + 1, SLICES, len(slice_tickers))
 
-    # Use the standard FMP client path (prices + fundamentals) — same as watchlist.
-    prices = _get_fmp_prices(slice_tickers)
+    # Use the standard FMP client path (OHLCV + fundamentals) — same as watchlist.
+    ohlcv = _get_fmp_ohlcv(slice_tickers)
     fundamentals = _get_fmp_fundamentals(slice_tickers)
 
     today = cache.today_key()
@@ -73,7 +73,7 @@ def run_rolling_scan(
     for ticker in slice_tickers:
         stock = _normalize_raw_to_stock(
             ticker=ticker,
-            closes=prices.get(ticker),
+            ohlcv=ohlcv.get(ticker),
             fundamentals=fundamentals.get(ticker),
         )
         signal = score_stock(stock, weights, filters)
@@ -99,15 +99,18 @@ def get_all_discovery_signals() -> list[dict[str, Any]]:
 # persistent store, so re-fetching today's slice each day is intentional).
 # ---------------------------------------------------------------------------
 
-def _get_fmp_prices(tickers: list[str]) -> dict[str, list[float] | None]:
-    # We still benefit from the daily price cache because the watchlist may
-    # have already fetched some of these earlier today.
+def _get_fmp_ohlcv(tickers: list[str]) -> dict[str, dict | None]:
+    # Share the daily OHLCV cache with the watchlist layer to avoid double-fetching.
     cache_name = f"prices_{cache.today_key()}"
     cached = cache.load(cache_name) or {}
+    # Evict old list-format entries (upgrade to OHLCV format)
+    stale = [t for t, v in cached.items() if isinstance(v, list)]
+    for t in stale:
+        del cached[t]
     missing = [t for t in tickers if t not in cached]
     if missing:
-        log.info("discovery: fetching FMP prices for %d ticker(s)", len(missing))
-        fresh = fmp_client.fetch_prices(missing)
+        log.info("discovery: fetching FMP OHLCV for %d ticker(s)", len(missing))
+        fresh = fmp_client.fetch_ohlcv(missing)
         cached.update(fresh)
         cache.save(cache_name, cached)
     return {t: cached.get(t) for t in tickers}
@@ -116,11 +119,20 @@ def _get_fmp_prices(tickers: list[str]) -> dict[str, list[float] | None]:
 def _get_fmp_fundamentals(tickers: list[str]) -> dict[str, dict[str, Any] | None]:
     cache_name = f"fundamentals_{cache.this_week_key()}"
     cached = cache.load(cache_name) or {}
-    missing = [t for t in tickers if t not in cached]
+    # Re-fetch entries missing eps_growth_rate (old cache format)
+    missing = [
+        t for t in tickers
+        if t not in cached or (
+            isinstance(cached.get(t), dict) and "eps_growth_rate" not in cached[t]
+        )
+    ]
     if missing:
         log.info("discovery: fetching FMP fundamentals for %d ticker(s)", len(missing))
         fresh = fmp_client.fetch_fundamentals(missing)
         for t in missing:
-            cached[t] = fresh.get(t) or {"pe": None, "market_cap": None, "profit_margin": None}
+            cached[t] = fresh.get(t) or {
+                "pe": None, "market_cap": None,
+                "profit_margin": None, "eps_growth_rate": None,
+            }
         cache.save(cache_name, cached)
     return {t: cached.get(t) for t in tickers}

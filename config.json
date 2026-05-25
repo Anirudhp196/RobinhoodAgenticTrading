@@ -4,7 +4,7 @@
     "GOOGL", "META", "AAPL", "MSFT", "AMZN",
     "JNJ", "KO", "COST", "JPM", "XOM", "BRK-B"
   ],
-  "signalThreshold": 70,
+  "signalThreshold": 0,
   "weights": {
     "trend": 0.30,
     "pullback": 0.30,

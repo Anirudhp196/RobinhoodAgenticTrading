@@ -24,8 +24,9 @@ from . import cache
 from .config import load_config
 from .data_layer import (
     _get_fundamentals,
-    _get_prices,
+    _get_ohlcv,
     _normalize_raw_to_stock,
+    fetch_spy_regime,
     fetch_universe,
 )
 from .discovery import (
@@ -67,13 +68,14 @@ def screen() -> dict[str, Any]:
     cfg = load_config()
     stocks = fetch_universe(cfg["universe"])
     signals = score_universe(stocks, cfg["weights"], cfg["riskFilters"])
+    regime = fetch_spy_regime()
 
     # Persist score history for non-errored signals
     cache.append_score_history(
         {s.ticker: s.score for s in signals if s.error is None}
     )
 
-    return _payload_for_signals(signals, cfg)
+    return _payload_for_signals(signals, cfg, regime)
 
 
 @app.get("/screen/{ticker}")
@@ -149,11 +151,11 @@ def discover() -> dict[str, Any]:
 
 @app.post("/refresh")
 def refresh() -> dict[str, Any]:
-    """Force a fresh fetch by clearing today's price cache."""
-    cache_name = f"prices_{cache.today_key()}"
-    path = cache.CACHE_DIR / f"{cache_name}.json"
-    if path.exists():
-        path.unlink()
+    """Force a fresh fetch by clearing today's price and regime caches."""
+    for cache_name in [f"prices_{cache.today_key()}", f"spy_regime_{cache.today_key()}"]:
+        path = cache.CACHE_DIR / f"{cache_name}.json"
+        if path.exists():
+            path.unlink()
     return screen()
 
 
@@ -167,17 +169,39 @@ async def stream() -> StreamingResponse:
 # Internals
 # ---------------------------------------------------------------------------
 
-def _payload_for_signals(signals: list[Signal], cfg: dict[str, Any]) -> dict[str, Any]:
-    threshold = cfg.get("signalThreshold", 70)
+def _payload_for_signals(
+    signals: list[Signal],
+    cfg: dict[str, Any],
+    regime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    threshold = cfg.get("signalThreshold", 65)
     qualified = [s for s in signals if s.error is None and s.score >= threshold]
+
+    regime = regime or {}
+    above_200ma = regime.get("above_200ma")
+
+    if above_200ma is False:
+        # Bear market: surface any qualifiers but warn loudly
+        verdict = (
+            "⚠ SPY is below its 200-day MA — market in downtrend. "
+            + (f"{len(qualified)} name(s) clear the bar, but caution is warranted."
+               if qualified
+               else "Nothing meets the bar. Hold — especially in a downtrend.")
+        )
+    elif qualified:
+        verdict = f"{len(qualified)} name(s) clear the bar"
+    else:
+        verdict = "Nothing meets the bar today. Hold."
+
     return {
         "generated_at": cache.today_key(),
         "threshold": threshold,
-        "verdict": (
-            f"{len(qualified)} name(s) clear the bar"
-            if qualified
-            else "Nothing meets the bar today. Hold."
-        ),
+        "market_regime": {
+            "above_200ma": above_200ma,
+            "spy_price": regime.get("spy_price"),
+            "spy_ma200": regime.get("spy_ma200"),
+        },
+        "verdict": verdict,
         "signals": [s.model_dump() for s in signals],
     }
 
@@ -192,14 +216,14 @@ async def _stream_events() -> AsyncIterator[bytes]:
     await asyncio.sleep(0)
 
     # Warm caches in one pass; per-ticker loop below then never hits the network.
-    prices = _get_prices(tickers)
+    ohlcv = _get_ohlcv(tickers)
     fundamentals = _get_fundamentals(tickers)
 
     signals: list[Signal] = []
     for i, ticker in enumerate(tickers, start=1):
         stock = _normalize_raw_to_stock(
             ticker=ticker,
-            closes=prices.get(ticker),
+            ohlcv=ohlcv.get(ticker),
             fundamentals=fundamentals.get(ticker),
         )
         sig = score_stock(stock, cfg["weights"], cfg["riskFilters"])
@@ -217,7 +241,8 @@ async def _stream_events() -> AsyncIterator[bytes]:
     cache.append_score_history(
         {s.ticker: s.score for s in signals if s.error is None}
     )
-    yield _sse({"type": "done", "payload": _payload_for_signals(signals, cfg)})
+    regime = fetch_spy_regime()
+    yield _sse({"type": "done", "payload": _payload_for_signals(signals, cfg, regime)})
 
 
 def _sse(event: dict[str, Any]) -> bytes:

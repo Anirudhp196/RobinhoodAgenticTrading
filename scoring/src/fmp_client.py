@@ -9,6 +9,12 @@ the daily call count low.
 
 Never raises on HTTP/JSON errors. Returns None for that ticker so one
 bad symbol does not kill a whole refresh (CLAUDE.md "never throw" rule).
+
+Call budget per day (free tier: 250):
+  - 1 call/ticker/day  for OHLCV prices (watchlist ~16 + discovery ~30)
+  - 3 calls/ticker/week for fundamentals (pe+margin, market_cap, eps_growth)
+  - 1 call/day for SPY regime check
+  Typical: ~47 price + ~21 fundamentals amortized + 1 spy ≈ 69/day
 """
 
 from __future__ import annotations
@@ -51,19 +57,24 @@ def _get(path: str, params: dict[str, Any] | None = None) -> Any | None:
         return None
 
 
-def fetch_prices(tickers: list[str]) -> dict[str, list[float] | None]:
+# ---------------------------------------------------------------------------
+# OHLCV prices (replaces the old close-only "prices" fetch)
+# ---------------------------------------------------------------------------
+
+def fetch_ohlcv(tickers: list[str]) -> dict[str, dict[str, list[float]] | None]:
     """
-    Returns {ticker: [close, close, ...] oldest -> newest} or None per ticker.
-    One call per ticker (free tier does not support batching).
+    Returns {ticker: {"closes": [...], "volumes": [...]}} or None per ticker.
+    Both lists are oldest -> newest, same length.
+    Uses the full EOD endpoint (not /light) to get volume data.
     """
-    return {t: _fetch_prices_single(t) for t in tickers}
+    return {t: _fetch_ohlcv_single(t) for t in tickers}
 
 
-def _fetch_prices_single(ticker: str) -> list[float] | None:
-    """~1 year of daily closes via /stable/historical-price-eod/light."""
+def _fetch_ohlcv_single(ticker: str) -> dict[str, list[float]] | None:
+    """~1 year of daily OHLCV via /stable/historical-price-eod."""
     today = date.today()
     raw = _get(
-        "/historical-price-eod/light",
+        "/historical-price-eod",
         {
             "symbol": ticker,
             "from": (today - timedelta(days=400)).isoformat(),
@@ -72,24 +83,36 @@ def _fetch_prices_single(ticker: str) -> list[float] | None:
     )
     if not isinstance(raw, list) or not raw:
         return None
-    # API returns newest -> oldest; we want oldest -> newest.
+
     closes: list[float] = []
-    for row in reversed(raw):
+    volumes: list[float] = []
+
+    for row in reversed(raw):  # API returns newest -> oldest; reverse to oldest -> newest
         if not isinstance(row, dict):
             continue
-        # /stable/ uses "price" for the EOD light endpoint (vs "close" on legacy).
-        v = _maybe_float(row.get("price"))
-        if v is not None:
-            closes.append(v)
-    return closes or None
+        # Full endpoint uses "close"; light used "price". Handle both.
+        c = _maybe_float(row.get("close") or row.get("adjClose") or row.get("price"))
+        v = _maybe_float(row.get("volume") or row.get("unadjustedVolume"))
+        if c is not None:
+            closes.append(c)
+            volumes.append(v if v is not None and v > 0 else 0.0)
 
+    if not closes:
+        return None
+    return {"closes": closes, "volumes": volumes}
+
+
+# ---------------------------------------------------------------------------
+# Fundamentals (pe, market_cap, profit_margin, eps_growth_rate)
+# ---------------------------------------------------------------------------
 
 def fetch_fundamentals(tickers: list[str]) -> dict[str, dict[str, Any] | None]:
     """
-    Returns {ticker: {"pe", "market_cap", "profit_margin"}} or None.
-    Two calls per ticker:
-      - /ratios-ttm    -> pe (priceToEarningsRatioTTM) + profit_margin
-      - /key-metrics-ttm -> market_cap
+    Returns {ticker: {"pe", "market_cap", "profit_margin", "eps_growth_rate"}} or None.
+    Three calls per ticker (cached weekly so this is cheap over time):
+      - /ratios-ttm        -> pe + profit_margin
+      - /key-metrics-ttm   -> market_cap
+      - /financial-growth  -> eps_growth_rate (YoY, as a fraction e.g. 0.15 = 15%)
     """
     return {t: _fetch_fundamentals_single(t) for t in tickers}
 
@@ -97,6 +120,7 @@ def fetch_fundamentals(tickers: list[str]) -> dict[str, dict[str, Any] | None]:
 def _fetch_fundamentals_single(ticker: str) -> dict[str, Any] | None:
     ratios = _get("/ratios-ttm", {"symbol": ticker})
     metrics = _get("/key-metrics-ttm", {"symbol": ticker})
+    growth = _get("/financial-growth", {"symbol": ticker, "limit": 1})
 
     pe: float | None = None
     profit_margin: float | None = None
@@ -108,9 +132,20 @@ def _fetch_fundamentals_single(ticker: str) -> dict[str, Any] | None:
     if isinstance(metrics, list) and metrics and isinstance(metrics[0], dict):
         market_cap = _maybe_float(metrics[0].get("marketCap"))
 
+    eps_growth_rate: float | None = None
+    if isinstance(growth, list) and growth and isinstance(growth[0], dict):
+        # FMP field is "epsgrowth" (annual YoY EPS growth as a fraction)
+        raw_growth = growth[0].get("epsgrowth") or growth[0].get("epsGrowth")
+        eps_growth_rate = _maybe_float(raw_growth)
+
     if pe is None and profit_margin is None and market_cap is None:
-        return None  # both endpoints failed
-    return {"pe": pe, "market_cap": market_cap, "profit_margin": profit_margin}
+        return None  # all endpoints failed
+    return {
+        "pe": pe,
+        "market_cap": market_cap,
+        "profit_margin": profit_margin,
+        "eps_growth_rate": eps_growth_rate,
+    }
 
 
 def _maybe_float(v: Any) -> float | None:

@@ -3,6 +3,15 @@ export type Metrics = {
   pct_from_high: number | null;
   ma200: number | null;
   current_price: number | null;
+  peg_ratio: number | null;
+  eps_growth_rate: number | null;
+  volume_ratio: number | null;
+};
+
+export type MarketRegime = {
+  above_200ma: boolean | null;
+  spy_price: number | null;
+  spy_ma200: number | null;
 };
 
 export type Signal = {
@@ -17,6 +26,7 @@ export type Signal = {
 export type ScreenPayload = {
   generated_at: string;
   threshold: number;
+  market_regime: MarketRegime;
   verdict: string;
   signals: Signal[];
 };

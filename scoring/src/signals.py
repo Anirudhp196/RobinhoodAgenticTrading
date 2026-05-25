@@ -5,14 +5,19 @@ Pure functions, no I/O. Input: NormalizedStock. Output: Signal.
 
 Design (matches CLAUDE.md):
   - 4 weighted components: trend, pullback, value, quality. Each maps to [0, 1].
-  - Final score = 100 * weighted sum. Threshold default 70.
+  - Final score = 100 * weighted sum. Threshold default 65.
   - Risk filters (RSI>75, P/E>60, small cap) add *flags* only; they do not
     modify the score. The user sees both and decides.
   - Reasons[] are human-readable explanations attached to every signal so
     nothing is a black box.
 
-Every public function is intentionally easy to test in isolation. Pass in
-synthetic closes / pe / margin values directly. No globals.
+Value component now uses PEG ratio (P/E ÷ EPS growth rate) when growth data
+is available, falling back to a lenient P/E-only curve otherwise.
+
+Pullback component is volume-adjusted: the same % drop on light volume scores
+higher than on heavy selling pressure.
+
+Every public function is intentionally easy to test in isolation.
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ class Signal(BaseModel):
     score: float                          # 0-100
     reasons: list[str] = []
     flags: list[str] = []
-    metrics: dict[str, float | None] = {}  # rsi, pct_from_high, ma200, etc.
+    metrics: dict[str, float | None] = {}  # rsi, pct_from_high, ma200, peg_ratio, etc.
     error: str | None = None              # set if the stock could not be scored
 
 
@@ -56,19 +61,29 @@ def compute_trend_score(closes: list[float]) -> float | None:
     return _clamp((ratio - 0.95) / 0.10, 0.0, 1.0)
 
 
-def compute_pullback_score(closes: list[float]) -> float | None:
+def compute_pullback_score(
+    closes: list[float],
+    volumes: list[float] | None = None,
+) -> float | None:
     """
-    Reward modest pullbacks on the way up, penalize buying at the top.
+    Reward modest pullbacks on healthy stocks, penalize buying at the top or
+    in a freefall.
 
-    pct off 52w high -> score:
+    pct off 52w high -> base score:
       0%  -> 0.0  (at the top: 'FOMO penalty')
       5%  -> 0.7
-      10% -> 1.0  (peak: doc's sweet spot)
+      10% -> 1.0  (sweet spot)
       15% -> 0.7
       25% -> 0.2  (deep drawdown — investigate)
       40% -> 0.0  (broken / falling knife)
 
-    Linear interpolation between waypoints.
+    Volume adjustment (applied after base score):
+      If recent 10-day avg volume < 0.8x yearly avg: quiet drift down = +10% bonus
+      If recent 10-day avg volume > 1.5x yearly avg: heavy selling = -15% penalty
+      Otherwise: no adjustment
+
+    This distinguishes "stock drifted down on no news" (good entry) from
+    "stock sold off hard" (investigate before buying).
     """
     if not closes:
         return None
@@ -76,28 +91,90 @@ def compute_pullback_score(closes: list[float]) -> float | None:
     if high52 <= 0:
         return None
     pct_off = (high52 - closes[-1]) / high52
-    return _piecewise_linear(
+    base = _piecewise_linear(
         pct_off,
         [(0.00, 0.0), (0.05, 0.7), (0.10, 1.0), (0.15, 0.7),
          (0.25, 0.2), (0.40, 0.0)],
     )
 
+    if volumes and len(volumes) >= 20:
+        lookback = min(len(volumes), 252)
+        recent = volumes[-10:]
+        historical = volumes[-lookback:]
+        pos_recent = [v for v in recent if v > 0]
+        pos_hist = [v for v in historical if v > 0]
+        if pos_recent and pos_hist:
+            avg_recent = sum(pos_recent) / len(pos_recent)
+            avg_hist = sum(pos_hist) / len(pos_hist)
+            if avg_hist > 0:
+                vol_ratio = avg_recent / avg_hist
+                if vol_ratio < 0.8:
+                    base = min(1.0, base * 1.10)   # quiet pullback: small bonus
+                elif vol_ratio > 1.5:
+                    base = base * 0.85              # heavy selling: penalty
 
-def compute_value_score(pe: float | None) -> float | None:
+    return base
+
+
+def compute_peg_score(
+    pe: float | None,
+    eps_growth_rate: float | None,
+) -> float | None:
     """
-    Peak around P/E = 15. Tapers off both sides; bottoms out by P/E ~ 80.
-    Negative or zero P/E (losing money / no earnings) returns 0.0
-    (not None — losing money is a *known* low-value signal).
+    Score valuation using PEG ratio when growth data is available, otherwise
+    fall back to a lenient P/E curve.
+
+    PEG = P/E / (EPS growth rate as %)
+    Example: P/E 30 with 25% annual EPS growth → PEG = 30/25 = 1.2
+
+    PEG scoring:
+      < 0.5  -> 1.0  (growing much faster than you're paying for)
+      0.5    -> 0.95
+      1.0    -> 0.85 (fairly valued)
+      1.5    -> 0.60
+      2.0    -> 0.30 (paying a lot for expected growth)
+      3.0    -> 0.10
+      5.0+   -> 0.0
+
+    P/E fallback curve (when growth data unavailable):
+      Peaks at P/E = 20 (more realistic than the old P/E 15 for large caps).
+      P/E of 15 still scores well (0.85); P/E of 60 scores < 0.10.
+
+    Growth rate constraints:
+      - eps_growth_rate must be > 2% to be useful for PEG (below that,
+        growth is too low to anchor a PEG — fall back to P/E curve).
+      - eps_growth_rate is capped at 100% to avoid absurdly low PEG values
+        from one-off base-year effects (e.g. coming out of a loss year).
+      - Negative growth → fall back to P/E curve (declining earnings companies
+        need to be evaluated differently, not penalized via a broken PEG).
     """
     if pe is None:
         return None
     if pe <= 0:
-        return 0.0
-    return _piecewise_linear(
-        pe,
-        [(0, 0.30), (10, 0.85), (15, 1.00), (20, 0.85),
-         (30, 0.50), (50, 0.10), (80, 0.00)],
+        return 0.0  # losing money — known low-value signal
+
+    # Determine if we can use PEG
+    use_peg = (
+        eps_growth_rate is not None
+        and eps_growth_rate > 0.02   # more than 2% annual growth
+        and eps_growth_rate <= 1.0   # cap at 100% to avoid base-year anomalies
     )
+
+    if use_peg:
+        # PEG = P/E ÷ growth_pct (where growth_pct = growth_rate * 100)
+        peg = pe / (eps_growth_rate * 100.0)  # type: ignore[operator]
+        return _piecewise_linear(
+            peg,
+            [(0.0, 1.0), (0.5, 0.95), (1.0, 0.85),
+             (1.5, 0.60), (2.0, 0.30), (3.0, 0.10), (5.0, 0.0)],
+        )
+    else:
+        # Fallback: lenient P/E curve, peak at 20 (realistic for quality large-caps)
+        return _piecewise_linear(
+            pe,
+            [(0, 0.20), (10, 0.70), (20, 1.00), (30, 0.75),
+             (40, 0.40), (55, 0.08), (80, 0.0)],
+        )
 
 
 def compute_quality_score(profit_margin: float | None) -> float | None:
@@ -166,8 +243,8 @@ def score_stock(
         return Signal(ticker=stock.ticker, score=0.0, error=stock.error)
 
     trend = compute_trend_score(stock.closes)
-    pullback = compute_pullback_score(stock.closes)
-    value = compute_value_score(stock.pe)
+    pullback = compute_pullback_score(stock.closes, stock.volumes or None)
+    value = compute_peg_score(stock.pe, stock.eps_growth_rate)
     quality = compute_quality_score(stock.profit_margin)
     rsi = compute_rsi(stock.closes)
 
@@ -183,19 +260,38 @@ def score_stock(
     weighted = sum(components[k] * weights.get(k, 0.0) for k in components)
     score = round(100.0 * weighted, 1)
 
-    # Metrics (for the UI detail panel)
+    # PEG ratio for metrics panel
+    peg_ratio: float | None = None
+    if stock.pe and stock.pe > 0 and stock.eps_growth_rate and stock.eps_growth_rate > 0.02:
+        peg_ratio = round(stock.pe / (stock.eps_growth_rate * 100.0), 2)
+
+    # Volume ratio for metrics panel
+    vol_ratio: float | None = None
+    if stock.volumes and len(stock.volumes) >= 20:
+        lookback = min(len(stock.volumes), 252)
+        pos_recent = [v for v in stock.volumes[-10:] if v > 0]
+        pos_hist = [v for v in stock.volumes[-lookback:] if v > 0]
+        if pos_recent and pos_hist:
+            avg_hist = sum(pos_hist) / len(pos_hist)
+            if avg_hist > 0:
+                vol_ratio = round(sum(pos_recent) / len(pos_recent) / avg_hist, 2)
+
     high52 = max(stock.closes[-252:]) if len(stock.closes) >= 252 else max(stock.closes)
     ma200 = sum(stock.closes[-200:]) / 200.0 if len(stock.closes) >= 200 else None
     pct_from_high = (high52 - stock.closes[-1]) / high52 if high52 > 0 else None
+
     metrics: dict[str, float | None] = {
         "rsi": round(rsi, 1) if rsi is not None else None,
         "pct_from_high": round(pct_from_high, 4) if pct_from_high is not None else None,
         "ma200": round(ma200, 2) if ma200 is not None else None,
         "current_price": round(stock.closes[-1], 2),
+        "peg_ratio": peg_ratio,
+        "eps_growth_rate": round(stock.eps_growth_rate, 4) if stock.eps_growth_rate is not None else None,
+        "volume_ratio": vol_ratio,
     }
 
     reasons = _build_reasons(stock, components, metrics)
-    flags = _build_flags(stock, rsi, filters)
+    flags = _build_flags(stock, rsi, filters, vol_ratio)
 
     return Signal(
         ticker=stock.ticker,
@@ -237,20 +333,36 @@ def _build_reasons(
             reasons.append(f"Trading {pct:+.1f}% vs 200-day MA — broken trend")
 
     pct_high = metrics["pct_from_high"]
+    vol_ratio = metrics.get("volume_ratio")
     if pct_high is not None:
         p = pct_high * 100
         if 0.05 <= pct_high <= 0.15:
-            reasons.append(f"{p:.1f}% off 52w high — sweet-spot pullback")
+            vol_note = ""
+            if vol_ratio is not None:
+                if vol_ratio < 0.8:
+                    vol_note = " on light volume (quiet drift — good entry)"
+                elif vol_ratio > 1.5:
+                    vol_note = " on heavy volume (selling pressure — investigate)"
+            reasons.append(f"{p:.1f}% off 52w high — sweet-spot pullback{vol_note}")
         elif pct_high < 0.02:
             reasons.append(f"Only {p:.1f}% off 52w high — buying the top")
         elif pct_high > 0.20:
             reasons.append(f"{p:.1f}% off 52w high — deep drawdown, investigate")
 
-    if stock.pe is not None:
-        if 10 <= stock.pe <= 20:
+    peg = metrics.get("peg_ratio")
+    eps_growth = metrics.get("eps_growth_rate")
+    if peg is not None:
+        if peg < 1.0:
+            reasons.append(f"PEG {peg:.2f} — growing faster than you're paying (P/E {stock.pe:.0f}, EPS growth {eps_growth*100:.0f}%)" if eps_growth else f"PEG {peg:.2f} — attractive growth-adjusted valuation")
+        elif peg <= 2.0:
+            reasons.append(f"PEG {peg:.2f} — fairly valued for its growth rate")
+        else:
+            reasons.append(f"PEG {peg:.2f} — paying a premium relative to earnings growth")
+    elif stock.pe is not None:
+        if 10 <= stock.pe <= 25:
             reasons.append(f"P/E of {stock.pe:.1f} — reasonable valuation")
         elif stock.pe > 40:
-            reasons.append(f"P/E of {stock.pe:.1f} — expensive")
+            reasons.append(f"P/E of {stock.pe:.1f} — expensive (no growth data to contextualize)")
         elif stock.pe <= 0:
             reasons.append("Negative P/E — unprofitable")
 
@@ -268,6 +380,7 @@ def _build_flags(
     stock: NormalizedStock,
     rsi: float | None,
     filters: dict[str, float],
+    vol_ratio: float | None,
 ) -> list[str]:
     flags: list[str] = []
     if rsi is not None and rsi > filters.get("maxRsi", 75):
@@ -276,6 +389,10 @@ def _build_flags(
         flags.append(f"very expensive (P/E {stock.pe:.0f})")
     if stock.market_cap is not None and stock.market_cap < filters.get("minMarketCap", 2e9):
         flags.append("small cap")
+    if vol_ratio is not None and vol_ratio > 2.0:
+        flags.append(f"unusually high volume ({vol_ratio:.1f}x avg — check news)")
+    if stock.eps_growth_rate is not None and stock.eps_growth_rate < -0.10:
+        flags.append(f"EPS declining ({stock.eps_growth_rate*100:.0f}% YoY)")
     return flags
 
 
