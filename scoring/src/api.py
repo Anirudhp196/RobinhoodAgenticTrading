@@ -175,13 +175,20 @@ def _payload_for_signals(
     regime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     threshold = cfg.get("signalThreshold", 65)
-    qualified = [s for s in signals if s.error is None and s.score >= threshold]
+    scored = [s for s in signals if s.error is None]
+    errored = [s for s in signals if s.error is not None]
+    qualified = [s for s in scored if s.score >= threshold]
 
     regime = regime or {}
     above_200ma = regime.get("above_200ma")
+    data_unavailable = len(scored) == 0 and len(errored) > 0
 
-    if above_200ma is False:
-        # Bear market: surface any qualifiers but warn loudly
+    if data_unavailable:
+        verdict = (
+            f"⚠ Data unavailable — could not score any of {len(errored)} ticker(s). "
+            "Check the terminal for FMP API errors (likely rate-limited; resets daily)."
+        )
+    elif above_200ma is False:
         verdict = (
             "⚠ SPY is below its 200-day MA — market in downtrend. "
             + (f"{len(qualified)} name(s) clear the bar, but caution is warranted."
@@ -189,9 +196,12 @@ def _payload_for_signals(
                else "Nothing meets the bar. Hold — especially in a downtrend.")
         )
     elif qualified:
-        verdict = f"{len(qualified)} name(s) clear the bar"
+        # Mention how many tickers had no data so it's not invisible
+        unavailable_note = f" ({len(errored)} ticker(s) had no data)" if errored else ""
+        verdict = f"{len(qualified)} name(s) clear the bar{unavailable_note}"
     else:
-        verdict = "Nothing meets the bar today. Hold."
+        unavailable_note = f" ({len(errored)} ticker(s) had no data)" if errored else ""
+        verdict = f"Nothing meets the bar today. Hold.{unavailable_note}"
 
     return {
         "generated_at": cache.today_key(),
@@ -201,6 +211,9 @@ def _payload_for_signals(
             "spy_price": regime.get("spy_price"),
             "spy_ma200": regime.get("spy_ma200"),
         },
+        "data_unavailable": data_unavailable,
+        "scored_count": len(scored),
+        "errored_count": len(errored),
         "verdict": verdict,
         "signals": [s.model_dump() for s in signals],
     }

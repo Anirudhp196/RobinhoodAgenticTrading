@@ -27,6 +27,9 @@ export type ScreenPayload = {
   generated_at: string;
   threshold: number;
   market_regime: MarketRegime;
+  data_unavailable?: boolean;
+  scored_count?: number;
+  errored_count?: number;
   verdict: string;
   signals: Signal[];
 };

@@ -101,38 +101,52 @@ def get_all_discovery_signals() -> list[dict[str, Any]]:
 
 def _get_fmp_ohlcv(tickers: list[str]) -> dict[str, dict | None]:
     # Share the daily OHLCV cache with the watchlist layer to avoid double-fetching.
+    # Never cache failures — see data_layer._get_ohlcv for rationale.
     cache_name = f"prices_{cache.today_key()}"
     cached = cache.load(cache_name) or {}
-    # Evict old list-format entries (upgrade to OHLCV format)
-    stale = [t for t, v in cached.items() if isinstance(v, list)]
-    for t in stale:
+    # Evict poisoned entries: old list-format AND any null values.
+    poisoned = [t for t, v in cached.items() if v is None or isinstance(v, list)]
+    for t in poisoned:
         del cached[t]
     missing = [t for t in tickers if t not in cached]
     if missing:
         log.info("discovery: fetching FMP OHLCV for %d ticker(s)", len(missing))
         fresh = fmp_client.fetch_ohlcv(missing)
-        cached.update(fresh)
-        cache.save(cache_name, cached)
+        successes = {t: v for t, v in fresh.items() if v is not None}
+        if successes:
+            cached.update(successes)
+            cache.save(cache_name, cached)
     return {t: cached.get(t) for t in tickers}
 
 
 def _get_fmp_fundamentals(tickers: list[str]) -> dict[str, dict[str, Any] | None]:
     cache_name = f"fundamentals_{cache.this_week_key()}"
     cached = cache.load(cache_name) or {}
-    # Re-fetch entries missing eps_growth_rate (old cache format)
-    missing = [
-        t for t in tickers
-        if t not in cached or (
-            isinstance(cached.get(t), dict) and "eps_growth_rate" not in cached[t]
-        )
-    ]
+    # Evict poisoned entries: old format, None, or all-None failed-fetch placeholders
+    poisoned: list[str] = []
+    for t, v in cached.items():
+        if v is None:
+            poisoned.append(t)
+        elif isinstance(v, dict):
+            if "eps_growth_rate" not in v:
+                poisoned.append(t)
+            elif all(v.get(k) is None for k in ("pe", "market_cap", "profit_margin", "eps_growth_rate")):
+                poisoned.append(t)
+    for t in poisoned:
+        del cached[t]
+    missing = [t for t in tickers if t not in cached]
     if missing:
         log.info("discovery: fetching FMP fundamentals for %d ticker(s)", len(missing))
         fresh = fmp_client.fetch_fundamentals(missing)
+        successes: dict[str, Any] = {}
         for t in missing:
-            cached[t] = fresh.get(t) or {
-                "pe": None, "market_cap": None,
-                "profit_margin": None, "eps_growth_rate": None,
-            }
-        cache.save(cache_name, cached)
+            v = fresh.get(t)
+            if v is None:
+                continue
+            if all(v.get(k) is None for k in ("pe", "market_cap", "profit_margin", "eps_growth_rate")):
+                continue
+            successes[t] = v
+        if successes:
+            cached.update(successes)
+            cache.save(cache_name, cached)
     return {t: cached.get(t) for t in tickers}

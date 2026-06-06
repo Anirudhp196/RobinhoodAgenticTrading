@@ -84,6 +84,7 @@ button:hover:not(:disabled) { filter: brightness(1.1); }
 }
 .verdict-hold { background: #1a1f2e; }
 .verdict-active { background: #14241d; border-color: #1e4d3a; }
+.verdict-error { background: #2a1212; border-color: #7f1d1d; color: #fca5a5; }
 .verdict-headline { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
 .verdict-sub { color: var(--muted); font-size: 12px; }
 

@@ -54,16 +54,19 @@ def fetch_spy_regime() -> dict[str, Any]:
     { "above_200ma": bool | None, "spy_price": float, "spy_ma200": float }
     None means data was unavailable — treat as unknown, not as a bear market.
     Cached daily so this costs 1 API call/day.
+
+    Only caches successful results — a failed fetch returns "unknown" but
+    does not poison the cache, so the next call will retry.
     """
     cache_name = f"spy_regime_{cache.today_key()}"
     cached = cache.load(cache_name)
-    if cached is not None:
+    if cached is not None and cached.get("above_200ma") is not None:
         return cached
 
     ohlcv = fmp_client.fetch_ohlcv(["SPY"])
     spy_data = ohlcv.get("SPY")
     if not spy_data or not spy_data.get("closes") or len(spy_data["closes"]) < 200:
-        log.warning("SPY data unavailable — regime unknown")
+        log.warning("SPY data unavailable — regime unknown (not cached)")
         return {"above_200ma": None, "spy_price": None, "spy_ma200": None}
 
     closes = spy_data["closes"]
@@ -86,23 +89,35 @@ def _get_ohlcv(tickers: list[str]) -> dict[str, dict[str, list[float]] | None]:
     """
     Returns {ticker: {"closes": [...], "volumes": [...]}} or None per ticker.
     Cached daily. Detects old list-format cache entries and re-fetches them.
+
+    IMPORTANT: failed fetches are NOT cached. If FMP returns null/None for a
+    ticker (rate limit, bad symbol, etc.), we leave it out of the cache so
+    the next call retries. Caching failures poisons the cache for the rest
+    of the day.
     """
     cache_name = f"prices_{cache.today_key()}"
     cached = cache.load(cache_name) or {}
 
-    # Detect old-format cache entries (list of closes, no volume) and evict them.
-    stale = [t for t, v in cached.items() if isinstance(v, list)]
-    if stale:
-        log.info("Evicting %d old-format price cache entries (upgrading to OHLCV)", len(stale))
-        for t in stale:
+    # Evict any poisoned entries: old list-format and any null values from
+    # previously-cached failures.
+    poisoned = [t for t, v in cached.items() if v is None or isinstance(v, list)]
+    if poisoned:
+        log.info("Evicting %d poisoned/old price cache entries", len(poisoned))
+        for t in poisoned:
             del cached[t]
 
     missing = [t for t in tickers if t not in cached]
     if missing:
         log.info("Fetching OHLCV for %d ticker(s) from FMP", len(missing))
         fresh = fmp_client.fetch_ohlcv(missing)
-        cached.update(fresh)
-        cache.save(cache_name, cached)
+        # Only cache successful fetches — never persist None.
+        successes = {t: v for t, v in fresh.items() if v is not None}
+        if successes:
+            cached.update(successes)
+            cache.save(cache_name, cached)
+        if len(successes) < len(missing):
+            failed = [t for t in missing if t not in successes]
+            log.warning("OHLCV fetch failed for %d ticker(s): %s", len(failed), failed[:5])
     else:
         log.info("All %d ticker prices served from cache", len(tickers))
 
@@ -113,27 +128,51 @@ def _get_fundamentals(tickers: list[str]) -> dict[str, dict[str, Any] | None]:
     """
     Returns {ticker: {"pe", "market_cap", "profit_margin", "eps_growth_rate"}} or None.
     Cached weekly. Re-fetches entries that are missing eps_growth_rate (old format).
+
+    IMPORTANT: failed fetches are NOT cached. If FMP fails for a ticker, we
+    leave it out so the next call retries. Caching failures poisons the cache
+    for the rest of the week.
     """
     cache_name = f"fundamentals_{cache.this_week_key()}"
     cached = cache.load(cache_name) or {}
 
-    # Re-fetch old-format entries missing eps_growth_rate
-    missing = [
-        t for t in tickers
-        if t not in cached or (
-            isinstance(cached.get(t), dict) and "eps_growth_rate" not in cached[t]
-        )
-    ]
+    # Evict poisoned entries: anything missing eps_growth_rate (old format),
+    # anything that's None, or anything where every field is None (a failed
+    # fetch we wrote as a placeholder before this fix).
+    poisoned = []
+    for t, v in cached.items():
+        if v is None:
+            poisoned.append(t)
+        elif isinstance(v, dict):
+            if "eps_growth_rate" not in v:
+                poisoned.append(t)
+            elif all(v.get(k) is None for k in ("pe", "market_cap", "profit_margin", "eps_growth_rate")):
+                poisoned.append(t)
+    if poisoned:
+        log.info("Evicting %d poisoned fundamentals cache entries", len(poisoned))
+        for t in poisoned:
+            del cached[t]
+
+    missing = [t for t in tickers if t not in cached]
 
     if missing:
         log.info("Fetching fundamentals for %d ticker(s) from FMP", len(missing))
         fresh = fmp_client.fetch_fundamentals(missing)
+        # Only cache successful fetches — never persist a None or all-None placeholder.
+        successes: dict[str, Any] = {}
         for t in missing:
-            cached[t] = fresh.get(t) or {
-                "pe": None, "market_cap": None,
-                "profit_margin": None, "eps_growth_rate": None,
-            }
-        cache.save(cache_name, cached)
+            v = fresh.get(t)
+            if v is None:
+                continue
+            if all(v.get(k) is None for k in ("pe", "market_cap", "profit_margin", "eps_growth_rate")):
+                continue
+            successes[t] = v
+        if successes:
+            cached.update(successes)
+            cache.save(cache_name, cached)
+        if len(successes) < len(missing):
+            failed = [t for t in missing if t not in successes]
+            log.warning("Fundamentals fetch failed for %d ticker(s): %s", len(failed), failed[:5])
     else:
         log.info("All %d ticker fundamentals served from cache", len(tickers))
 

@@ -149,7 +149,11 @@ function WatchlistView({
   const qualified = data.signals.filter(
     (s) => s.error === null && s.score >= data.threshold
   );
-  const verdictTone = qualified.length === 0 ? "hold" : "active";
+  const verdictTone = data.data_unavailable
+    ? "error"
+    : qualified.length === 0
+    ? "hold"
+    : "active";
 
   return (
     <>

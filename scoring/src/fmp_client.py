@@ -71,10 +71,17 @@ def fetch_ohlcv(tickers: list[str]) -> dict[str, dict[str, list[float]] | None]:
 
 
 def _fetch_ohlcv_single(ticker: str) -> dict[str, list[float]] | None:
-    """~1 year of daily OHLCV via /stable/historical-price-eod."""
+    """
+    ~1 year of daily prices via /stable/historical-price-eod/light (free tier).
+
+    The /light endpoint returns rows shaped like:
+        {"symbol": "AAPL", "date": "2026-05-23", "price": 180.5, "volume": 50000000}
+    Volume is included on the free tier — confirmed by inspecting live responses.
+    The non-light /historical-price-eod endpoint is paid-tier (returns 404 on free).
+    """
     today = date.today()
     raw = _get(
-        "/historical-price-eod",
+        "/historical-price-eod/light",
         {
             "symbol": ticker,
             "from": (today - timedelta(days=400)).isoformat(),
@@ -90,8 +97,7 @@ def _fetch_ohlcv_single(ticker: str) -> dict[str, list[float]] | None:
     for row in reversed(raw):  # API returns newest -> oldest; reverse to oldest -> newest
         if not isinstance(row, dict):
             continue
-        # Full endpoint uses "close"; light used "price". Handle both.
-        c = _maybe_float(row.get("close") or row.get("adjClose") or row.get("price"))
+        c = _maybe_float(row.get("price") or row.get("close") or row.get("adjClose"))
         v = _maybe_float(row.get("volume") or row.get("unadjustedVolume"))
         if c is not None:
             closes.append(c)
