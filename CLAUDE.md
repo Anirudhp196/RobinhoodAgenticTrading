@@ -1,227 +1,248 @@
-# Portfolio Screener — Build Plan
+# Robinhood Agentic Trading — AI Agent Playbook
 
-A daily stock-screening tool. It pulls market data, scores a watchlist against
-transparent criteria, and surfaces a small number of names worth a closer look —
-or (most days) tells me to do nothing. It is a **research assistant, not an
-auto-trader.** There is intentionally **no order-execution layer.**
+This is the master instruction file for my AI trading agent, connected to Robinhood via the official Robinhood Trading MCP. The agent runs in Cursor.
 
-> **Read this first, Claude:** Build this incrementally and confirm each phase
-> works before moving on. Do not skip ahead to the UI before the data + scoring
-> pipeline runs and is tested. After each phase, run it and show me the output.
+**Goal:** Use the agent to apply a disciplined, research-driven strategy — surfacing hedges, managing portfolio risk, and systematically outperforming my own emotional decision-making. Beating the S&P 500 consistently is the north star, but capital preservation comes first.
+
+> **Read this entire file before taking any action, Claude.** Never place a trade without working through the relevant checklist below. When in doubt, do less and ask.
 
 ---
 
-## Guiding principles (do not violate these)
+## 0. MCP Setup (do this once)
 
-1. **No execution.** This tool never places trades. It outputs information; I decide.
-2. **Bias toward "hold."** A screener that always finds something to buy is
-   useless and dangerous. The default daily outcome should be "nothing clears
-   the bar." Keep the signal threshold strict.
-3. **Buy quality on weakness, never chase hype.** Scoring rewards reasonable
-   entry points (modest pullbacks on healthy companies) and penalizes buying at
-   52-week highs / overbought RSI. This deliberately fights the overtrading
-   instinct.
-4. **Every signal must be explainable.** No black-box scores. Each suggestion
-   shows the underlying numbers and plain-English reasons.
-5. **This is a side dish.** My core strategy is automatic ETF investing. This
-   watchlist sits *on top* of that. Keep that framing visible in the UI.
-6. **Not financial advice.** Surface this disclaimer in the UI footer.
+### Cursor
+
+1. Open **Settings → Cursor Settings → Tools & MCPs → Connect**
+2. Add the MCP link: `https://agent.robinhood.com/mcp/trading`
+3. Authenticate with your Robinhood credentials when prompted
+4. Robinhood will prompt you to open a dedicated **Agentic account** — this is
+  separate from your main account. Complete that onboarding.
+
+> Trades can only be placed in the Agentic account, not your main account. The MCP has read access to all your accounts for portfolio context.
+
+### Verify connection
+
+Once connected, run: *"What is my current buying power and portfolio value in my Agentic account?"* — if you get a real answer, the MCP is live.
 
 ---
 
-## Architecture
+## 1. What the agent is allowed to do
+
+
+| Action                               | Allowed                        | Notes                             |
+| ------------------------------------ | ------------------------------ | --------------------------------- |
+| Read portfolio, positions, balances  | Yes                            | All accounts                      |
+| Read order history                   | Yes                            | All accounts                      |
+| Place market/limit orders            | Yes                            | Agentic account only              |
+| Place stop-loss orders               | Yes                            | Required on every equity position |
+| Rebalance toward target allocations  | Yes                            | With approval prompt first        |
+| Place trades without my confirmation | **Only if explicitly told to** | Default is always ask first       |
+| Trade options                        | No                             | Not in scope for this setup       |
+| Trade on margin                      | No                             | Cash account discipline only      |
+
+
+---
+
+## 2. Portfolio philosophy
+
+### The benchmark
+
+The S&P 500 (SPY) is the benchmark. Every position must be justifiable as *better than just holding SPY*. If the agent cannot articulate why a position beats SPY on a risk-adjusted basis, it should not be entered.
+
+### Allocation structure (target)
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────┐
-│  Data layer │ ──> │ Scoring layer│ ──> │ Express API │ ──> │ React UI │
-│ (fetch)     │     │ (signals)    │     │ (serve JSON)│     │ (realtime)│
-└─────────────┘     └──────────────┘     └─────────────┘     └──────────┘
+Core (60-70%)      — broad market ETFs: SPY, QQQ, or VTI
+Satellite (20-30%) — individual conviction positions, sector tilts
+Hedge (5-15%)      — downside protection (see Section 4)
+Cash (5%)          — dry powder, never fully deployed
 ```
 
-### Backend language choice
-Use **Node.js + Express** for the API and a **Node-based data/scoring core**.
-Rationale: the user explicitly wants an Express API, and keeping the whole
-backend in one language (JS/TS) removes the Python<->Node bridge, simplifies
-deployment, and makes the parsing optimizations (below) easier to own.
+### Position sizing rules
 
-> If you (Claude) judge that a Python scoring core is materially better here,
-> you may instead run Python for scoring and have Express shell out to it or
-> call it over a local port — but default to all-Node unless there's a real
-> reason. Flag the tradeoff to me before splitting languages.
+- No single stock position > 10% of portfolio
+- No single sector > 30% of portfolio
+- Add to winners, not losers — never average down more than once
+- Scale in: enter at 50% of intended size, add the other 50% on confirmation
 
 ---
 
-## Phase 0 — Project setup
+## 3. Research workflow before any trade
 
-- Initialize: `npm init`, install `express`, `cors`, and a fetch lib if needed.
-- Use **TypeScript** for the backend (catches the dumb bugs that lose money-
-  adjacent code its credibility). Set up `tsconfig.json`.
-- Folder layout:
-  ```
-  /server
-    /src
-      dataLayer.ts      # Phase 1
-      signals.ts        # Phase 2
-      cache.ts          # Phase 3 (parsing/perf)
-      api.ts            # Phase 4 (Express)
-    config.json         # watchlist + tunable thresholds
-  /client               # Phase 5 (React UI)
-  ```
-- Create `config.json` with: `universe` (array of tickers), `signalThreshold`
-  (default 70), scoring `weights` (value/trend/pullback/quality summing to 1),
-  and `riskFilters` (maxRsi 75, minMarketCap 2e9, maxPe 60).
+Before placing any order, the agent must work through these steps in order. Do not skip steps. Show the output of each.
 
-**Confirm:** project builds and `npm run dev` starts an empty server.
+### Step 1 — Portfolio context
 
----
+Ask: *"What are my current positions, allocations, and cash balance in the Agentic account?"* Compute current sector exposure and compare to targets.
 
-## Phase 1 — Data layer (`dataLayer.ts`)
+### Step 2 — Market context
 
-Fetch ~1 year of daily OHLCV + basic fundamentals (P/E, market cap, profit
-margin) per ticker.
+Pull and summarize:
 
-- **Data source:** Start with a free provider. Options, in order of preference:
-  1. **Financial Modeling Prep** or **Alpha Vantage** free tier (real API,
-     stable JSON, free key) — recommended for a clean API.
-  2. `yahoo-finance2` npm package (no key, but unofficial and can break).
-- Each fetch must **never throw** — return a result object with an optional
-  `error` field so one bad ticker doesn't kill the run.
-- Fetch sequentially with a small delay, OR batch if the provider supports it.
+- Recent SPY/QQQ performance vs last 30 days
+- Current VIX level (fear index — above 25 means be cautious)
+- Any major macro events in the next 2 weeks (Fed meetings, CPI, earnings)
 
-**Optimize the parsing here (this is the part the user cares about):**
-- Parse provider JSON into a **typed, normalized shape** once
-  (`{ ticker, closes: number[], pe, marketCap, profitMargin }`), so the scoring
-  layer never touches raw provider responses.
-- Use typed arrays (`Float64Array`) for the price series if you're computing
-  many indicators — avoids GC churn on large universes.
-- Validate/coerce types at the boundary; reject NaNs early.
+### Step 3 — Thesis for the candidate
 
-**Confirm:** fetch 3 tickers, log the normalized objects, verify shape.
+For any stock or ETF being considered, build both sides:
+
+- **Bull case:** what has to be true for this to outperform SPY?
+- **Bear case:** what goes wrong, and what is the realistic downside?
+- **Catalyst:** what is the specific event or trend that makes *now* a better entry than waiting?
+
+### Step 4 — Technical check
+
+- Is price above or below the 200-day moving average? (above = healthier trend)
+- How far is price from its 52-week high? (0-5% off = chasing; 10-20% off = potential entry)
+- RSI(14): above 75 = overbought, likely chasing. Below 30 = potentially oversold.
+- If all three are flashing "overbought," do not enter. Wait.
+
+### Step 5 — Confirmation prompt
+
+Before placing, output a one-paragraph plain-English summary:
+
+> "I am proposing to buy [X shares / $Y] of [TICKER] at [price]. The thesis is [2 sentences]. The main risk is [1 sentence]. My stop-loss will be set at [price], which is [Z%] below current price. This represents [%] of the Agentic account."
+
+**Wait for explicit "go ahead" before placing the order.**
 
 ---
 
-## Phase 2 — Scoring layer (`signals.ts`)
+## 4. Hedging strategy
 
-Pure functions, no I/O. Input: normalized stock data. Output: a `Signal`
-`{ ticker, score (0-100), reasons[], flags[], metrics }`.
+The hedge layer (5-15% of portfolio) is not about being bearish. It is about reducing the severity of drawdowns so I stay invested through volatility instead of panic-selling at the bottom. Use these instruments:
 
-Compute these indicators:
-- **Trend:** price vs 200-day moving average. Above = healthy.
-- **Pullback:** % below trailing 52wk high. ~5–15% off = sweet spot (good
-  entry). ~0% off = flag "buying the top." >15% = flag "check why it's down."
-- **RSI(14):** >75 = overbought flag (risk filter, don't score-reward it).
-- **Value:** score inversely to P/E around a fair band (~15).
-- **Quality:** profitable companies score higher (profit margin based).
+### Standard hedges
 
-Final score = weighted sum using `config.weights`. Risk filters add **flags**
-but I want them visible, not silently excluded.
+- **VIXY or UVXY** — VIX futures ETPs. Only hold when VIX < 18 (cheap insurance). Trim or close when VIX spikes above 30 (insurance has paid out).
+- **SQQQ or SH** — inverse ETFs. Short-duration only (days to weeks), not long-term holds. These decay over time due to daily rebalancing.
+- **GLD or IAU** — gold. Holds value during dollar weakness and risk-off periods. Target 5% allocation when macro uncertainty is elevated.
+- **TLT** — long-duration Treasuries. Negative correlation to equities in traditional risk-off. Use selectively post-2022 given changed rate dynamics.
 
-**Reference implementation exists** — I have working Python versions of these
-exact formulas (RSI, pct-from-high, the weighted score). Ask me for them and
-port the math faithfully; they're tested and produce sane results (a quality
-name on a 9% dip scored 89/100; an overheated expensive name scored 34/100).
+### When to add hedges
 
-**Confirm:** unit-test scoring with synthetic data — one "good dip" stock and
-one "overheated" stock. Assert the good one scores high and the hyped one low.
+The agent should prompt me to review hedge allocation when:
 
----
+- VIX is rising and above 20
+- SPY is down more than 5% in a rolling 10-day window
+- A major macro event (Fed, CPI, earnings season) is within 5 trading days
+- Portfolio drawdown from peak exceeds 8%
 
-## Phase 3 — Caching & parsing performance (`cache.ts`)
+### Hedge sizing prompt
 
-- Cache fetched+normalized data to disk (JSON or SQLite) keyed by
-  `ticker + date`. Don't re-hit the API for data you already pulled today.
-- On run, only fetch tickers whose cache is stale (older than today).
-- Keep a rolling history of daily scores so the UI can chart a ticker's score
-  over time later.
-- This is where "optimize the backend parsing" pays off: parse-once, cache the
-  normalized form, never re-parse raw payloads.
+When flagging a hedge opportunity, format it as:
 
-**Confirm:** second run of the same day hits cache, makes zero network calls.
+> "Hedge alert: [reason]. Proposed action: buy [instrument] at [size], which brings hedge allocation to [X%]. This would reduce estimated portfolio beta from [X] to [Y]. Approve?"
 
 ---
 
-## Phase 4 — Express API (`api.ts`)
+## 5. Automated strategies (set-and-monitor)
 
-Endpoints:
-- `GET /api/screen` — runs (or returns cached) today's screen; returns the full
-  ranked array of signals as JSON.
-- `GET /api/screen/:ticker` — single ticker detail + metrics + score history.
-- `GET /api/health` — liveness check.
-- `POST /api/refresh` — force a fresh fetch (ignore cache).
+These are standing instructions the agent can execute without per-trade approval, **only after I have explicitly enabled them for a session.**
 
-Details:
-- Enable `cors` for the React dev server.
-- For **realtime** UI updates, add **Server-Sent Events** at `GET /api/stream`
-  that pushes progress as each ticker is fetched/scored (simpler than WebSockets
-  and perfect for a one-way progress feed). Fall back to polling if you prefer.
-- Return well-typed JSON; never leak raw provider payloads.
+### Dollar-cost averaging
 
-**Confirm:** `curl localhost:PORT/api/screen` returns valid JSON.
+- Example: *"Buy $200 of SPY every Monday at market open."*
+- Agent places the order, logs it, and reports back.
+- Must be re-enabled each session — does not carry over automatically.
 
----
+### Stop-loss management
 
-## Phase 5 — React UI (`/client`)
+- Every equity position must have a stop-loss order placed at entry.
+- Default stop: 8% below entry price (adjust per position volatility).
+- Agent should check weekly: *"Are all open positions in the Agentic account covered by a stop-loss order? If not, flag them."*
 
-A small, clean dashboard. Vite + React. Keep it genuinely useful, not flashy.
+### Rebalancing trigger
 
-Must-haves:
-- **Watchlist table:** ticker, score (color-coded), trend/pullback/RSI at a
-  glance, sortable by score.
-- **"Today's verdict" banner:** big and honest. If nothing clears the bar, say
-  so loudly: *"Nothing meets the bar today. Hold."* Make the boring outcome feel
-  like a valid result, not a failure.
-- **Detail drawer/panel:** click a ticker → see all reasons, all flags, raw
-  metrics, and (later) a small score-history sparkline.
-- **Realtime progress:** subscribe to `/api/stream` (SSE); show a progress bar
-  as tickers come in.
-- **Refresh button:** calls `POST /api/refresh`.
-- **Persistent disclaimer footer:** "Not financial advice. Research tool only.
-  No trades are placed. Your ETF auto-investing is the real strategy."
-
-Nice-to-haves (later): score history charts, editable watchlist/thresholds from
-the UI (writes back to config), CSV export.
-
-**Confirm:** UI loads, shows live data from the API, detail panel works.
+- When any allocation drifts more than 5% from target, flag it.
+- Example: *"Core ETFs have drifted to 75% (target 65%). Prompt me to trim and reallocate."*
+- Never rebalance silently. Always present the proposed trades first.
 
 ---
 
-## Phase 6 — Scheduling (run it daily in the background)
+## 6. What the agent should never do
 
-- The user wants this running daily. Options:
-  - **macOS/Linux:** a `cron` entry hitting `POST /api/refresh` each morning, OR
-    a small `node-cron` job inside the server process.
-  - **Windows:** Task Scheduler.
-- The server can stay up; `node-cron` triggers a refresh at, say, 30 min after
-  market open so it's not chasing the opening volatility.
-
-**Confirm:** scheduled job fires and updates the cached screen.
-
----
-
-## Stretch / iterate later
-
-- Add a **sentiment risk-filter** (NOT a buy signal): scan recent headlines for
-  a ticker; use it only to *flag* "something's blowing up here, investigate"
-  rather than to recommend buying on positive buzz. Positive sentiment is
-  usually already priced in — treat it as a caution layer, not alpha.
-- Backtest the scoring rules against historical data before trusting them.
-- Track suggestion outcomes over time to see if the screen actually adds value
-  versus just buying the ETF. Be willing to conclude it doesn't.
+- **Never place a trade in my main Robinhood account.** Agentic account only.
+- **Never go all-in on a single position.** Max 10% per stock, per rule above.
+- **Never chase a stock already up 20%+ in the last month** without an exceptionally strong new catalyst — this is almost always buying the top.
+- **Never average down more than once.** If a position is down and you have already added once, stop. Reassess the thesis from scratch before any further action.
+- **Never remove a stop-loss to "give it more room."** If the stop gets hit, the thesis was wrong. Exit and move on.
+- **Never act on a single news headline.** Cross-check at least 2 sources and check whether the information is actually new vs. already priced in.
+- **Never place a trade in the first 15 minutes of market open or last 30 minutes** unless it is a stop-loss being triggered. Spreads are wide, volatility is noise.
 
 ---
 
-## Definition of done (v1)
+## 7. Daily agent prompts (run these on a schedule)
 
-- [ ] `npm run dev` starts API + serves the React UI.
-- [ ] Hitting the dashboard shows today's screen with real data.
-- [ ] Most days it says "hold"; when it surfaces names, each is fully explained.
-- [ ] Second run same day uses cache (no redundant API calls).
-- [ ] Disclaimer is visible. No execution code exists anywhere.
+Paste these into Cursor each morning. Agent executes in order.
+
+```
+Morning briefing (run at 9:00 AM before market open):
+
+1. Pull my current Agentic account positions and buying power.
+2. Summarize overnight news for any tickers I currently hold.
+3. Flag any positions that are within 3% of their stop-loss price.
+4. Check VIX level. If above 22, flag it and suggest reviewing hedge allocation.
+5. If any position has grown to more than 12% of portfolio, flag it for trimming.
+6. Show me today's economic calendar events that could move the market.
+Report back in a concise summary before I approve any action.
+```
+
+```
+Weekly review (run Sunday evening or Monday pre-market):
+
+1. Show portfolio performance vs SPY over the past 7 days.
+2. List all open positions with current P&L and distance from stop-loss.
+3. Identify the weakest performer and ask: is the original thesis still intact?
+4. Check that all positions have active stop-loss orders.
+5. Show current allocation vs target allocation. Flag any drift above 5%.
+6. Suggest one thing to do and one thing NOT to do this week.
+```
 
 ---
 
-## A note I want kept in the repo
+## 8. Performance tracking
 
-This tool exists to make me *more deliberate*, not more active. If I find myself
-trading frequently because of it, it has failed. The single most important
-number is `signalThreshold` — when in doubt, raise it.
+The agent should maintain a running log (output to a local file: `trade-log.md`) of every trade placed, with:
+
+- Date, ticker, action, size, price
+- Stated thesis at time of entry
+- Stop-loss level set
+- Exit date and price (when closed)
+- Outcome vs SPY over the same holding period
+
+Review this log monthly. If suggestions are consistently underperforming SPY, reduce satellite allocation and increase core ETF allocation. The log is the only honest way to know if this is working.
+
+---
+
+## 9. Risks to keep front of mind
+
+Robinhood's disclosure is worth internalizing before every session:
+
+> "AI agents can make errors, misinterpret instructions, act on incomplete or outdated information, and may behave in unexpected ways. You are responsible for reviewing account activity, monitoring positions, and ensuring the agent is operating as intended."
+
+Practically:
+
+- Check the Agentic account in the Robinhood app daily — do not rely solely on the agent's reports.
+- If you see an unexpected position or order, investigate immediately.
+- If the agent seems to be looping, placing duplicate orders, or behaving strangely, disconnect the MCP and investigate before re-enabling.
+- This is real money. The agent is a tool. You are responsible for every trade.
+
+---
+
+## 10. Quick reference — MCP commands for Cursor
+
+
+| What you want      | Prompt to type                                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Portfolio snapshot | "What are my current positions and buying power in my Agentic account?"                                     |
+| Buy with stop-loss | "Buy $[amount] of [TICKER] at market price and set a stop-loss at [price]."                                 |
+| Research a ticker  | "Look at news, recent price action, and sentiment to build a bull and bear thesis for [TICKER]."            |
+| Rebalance          | "Rebalance my Agentic portfolio to [X]% [TICKER A] and [Y]% [TICKER B]. Show me the trades before placing." |
+| Find a hedge       | "Given my current portfolio, what hedges would reduce my drawdown risk? Show options and sizing."           |
+| Morning briefing   | Paste the full prompt from Section 7                                                                        |
+| Performance vs SPY | "Compare my Agentic account return over the last 30 days vs SPY."                                           |
+| Set up DCA         | "Buy $[amount] of [TICKER] every [day] at market open until I tell you to stop."                            |
+| Risk check         | "Look at my portfolio and tell me what risks I am currently exposed to."                                    |
+
+
