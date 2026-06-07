@@ -23,7 +23,8 @@ The agent reads this file at the start of every discovery session to avoid re-re
 
 | Added | Ticker | Reason (1 sentence) | Price at research | Next check |
 | ----- | ------ | ------------------- | ----------------- | ---------- |
-| —     | —      | —                   | —                 | —          |
+| Jun 6, 2026 | AVGO | Post-earnings selloff on Google dual-sourcing fears; fundamentals strong but needs news verification before buying. | ~$385 | After CPI (Jun 10) + news check |
+| Jun 6, 2026 | TSM | AI foundry demand intact but stock still near ATH; wait for deeper pullback or post-CPI clarity. | ~$412 | Pullback to $385–390 or after CPI |
 
 
 ---
@@ -33,7 +34,7 @@ The agent reads this file at the start of every discovery session to avoid re-re
 
 | Approved | Ticker | Research summary | Target entry | Stop-loss |
 | -------- | ------ | ---------------- | ------------ | --------- |
-| —        | —      | —                | —            | —         |
+| Jun 6, 2026 | UBER | Platform compounder near 52-week low; bookings +21%, Q2 EPS guide +30%+; zero overlap with main/Roth books. | ~$70.40 (50% scale-in first) | $64.75 |
 
 
 ---

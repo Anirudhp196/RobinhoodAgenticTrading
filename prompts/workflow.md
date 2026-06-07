@@ -25,7 +25,7 @@ WORKFLOW.md           → this file — orchestrates all of the above
 
 > Invoke: `account-snapshot.md`
 
-Run this before anything else. You need to know your buying power, current positions, and any open orders before making any other decision. If buying power is $0, skip to Step 4 (monitor only).
+Run this before anything else. You need to know your buying power, current positions, and any open orders before making any other decision. If buying power is $0, you can still run Steps 3–4 (discover, research, watchlist) — only Steps 5–6 (MCP order preview and post-fill logging) require funded buying power plus your explicit approval to buy.
 
 Output to look for:
 
@@ -49,7 +49,7 @@ Output to look for:
 
 ---
 
-### Step 3 — Discovery (only if buying power > $0 and no urgent exits)
+### Step 3 — Discovery (if no urgent exits; buying power not required)
 
 > Invoke: `discover.md`
 
@@ -70,11 +70,11 @@ Run once per candidate from Step 3. The file ends with a forced decision: Ignore
 
 ---
 
-### Step 5 — Order preview (only for names that cleared Step 4)
+### Step 5 — Order preview (only for names that cleared Step 4; requires buying power)
 
 > Invoke: `order-preview.md` with [TICKER] filled in
 
-This is the last gate before any money moves. The file explicitly does NOT place a trade — it simulates and stops. Review the output carefully:
+This is the last gate before any money moves. Requires funded buying power to call `review_equity_order`; if buying power is $0, stop after a paper preview (sizing, thesis, stop-loss proposal) and wait until the account is funded. The file explicitly does NOT place a trade — it simulates and stops. Review the output carefully:
 
 - Does the sizing make sense given current portfolio weight?
 - Is the stop-loss level realistic or just arbitrary?
@@ -84,11 +84,11 @@ If everything looks right, give explicit "go ahead" to place the order. If anyth
 
 ---
 
-### Step 6 — Log the trade
+### Step 6 — Log the trade (only after you approve and an order fills)
 
-> Update: `watchlist.md` (move from Watch to Bought, add entry price)
+> Update: `watchlist.md` (move from Watch to Bought, add entry price) and `trade-log.md`
 
-Every completed buy gets logged immediately with: date, ticker, shares, price, thesis in one sentence, stop-loss level. Do this before closing the session.
+Every completed buy gets logged immediately with: date, ticker, shares, price, thesis in one sentence, stop-loss level. Do this before closing the session. Nothing to log until you say go ahead and the order executes.
 
 ---
 
