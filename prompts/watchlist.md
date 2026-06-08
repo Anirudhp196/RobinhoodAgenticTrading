@@ -31,10 +31,15 @@ The agent reads this file at the start of every discovery session to avoid re-re
 
 ## Graduated (approved for order preview, not yet bought)
 
+**Orders placed 2026-06-08 (queued for Mon regular session):** NOW, SOXX, HOOD, MRVL, UBER @ $20 each. Move to Bought after fill; place stops immediately.
 
 | Approved | Ticker | Research summary | Target entry | Stop-loss |
 | -------- | ------ | ---------------- | ------------ | --------- |
-| Jun 6, 2026 | UBER | Platform compounder near 52-week low; bookings +21%, Q2 EPS guide +30%+; zero overlap with main/Roth books. | ~$70.40 (50% scale-in first) | $64.75 |
+| Jun 8, 2026 | NOW | SaaS rebound; beat/raise Q1; AI Assist target $1.5B; ~47% off highs; diversifies from main book. | $20 market @ ~$112 | $103.25 |
+| Jun 8, 2026 | SOXX | Semi ETF with 8% single-name caps; broad AI/semi exposure without picking one memory name. | $20 market @ ~$546 | $502.50 |
+| Jun 8, 2026 | HOOD | Fintech diversifier; event contracts + options growing; crypto rev weak but not thesis-breaking. | $20 market @ ~$82 | $75.75 |
+| Jun 8, 2026 | MRVL | AI datacenter networking/custom silicon; record Q1 + raised FY27 guide; wait for regular session (avoid chasing pre-market pop). | $20 market @ ~$276 | $254.00 |
+| Jun 8, 2026 | UBER | Platform compounder near range low; bookings +21%, Q2 EPS guide +30%+; zero overlap with main/Roth. | $20 market @ ~$71 | $65.00 |
 
 
 ---
@@ -54,7 +59,7 @@ The agent reads this file at the start of every discovery session to avoid re-re
 
 | Dropped | Ticker | Reason dropped | Price when dropped |
 | ------- | ------ | -------------- | ------------------ |
-| —       | —      | —              | —                  |
+| Jun 8, 2026 | MU | Swapped for UBER in $100 basket — extended near highs, Jun 24 earnings binary, cyclical memory risk. | ~$880 |
 
 
 ---
