@@ -20,36 +20,37 @@ The agent reads this file at the start of every discovery session to avoid re-re
 
 ## Active Watch
 
+**Session note (Jun 13):** Path **C** — fund Agentic over the weekend; Monday targets **AVGO** + **XLE** after deposit clears. Re-run `ticker-research.md` before order preview. **NOW** soft stop breached — user to decide exit separately.
 
 | Added | Ticker | Reason (1 sentence) | Price at research | Next check |
 | ----- | ------ | ------------------- | ----------------- | ---------- |
-| Jun 6, 2026 | AVGO | Post-earnings selloff on Google dual-sourcing fears; fundamentals strong but needs news verification before buying. | ~$385 | After CPI (Jun 10) + news check |
-| Jun 6, 2026 | TSM | AI foundry demand intact but stock still near ATH; wait for deeper pullback or post-CPI clarity. | ~$412 | Pullback to $385–390 or after CPI |
+| Jun 6, 2026 | AVGO | Q2 AI revenue strong; guidance reset priced in (~23% off highs); custom ASIC thesis intact post-CPI. | ~$382 (Jun 12) | After weekend fund + Mon open; Sep earnings |
+| Jun 13, 2026 | XLE | Energy diversifier for Agentic book; whole-share (~$58) enables broker stop; CPI/geo tailwind. | ~$58 (Jun 12) | After weekend fund + Mon open; propose stop ~$53.30 |
+| Jun 6, 2026 | TSM | AI foundry demand intact but stock still near ATH; wait for deeper pullback or post-CPI clarity. | ~$422 (Jun 12) | Pullback to $385–390 — skip until target zone |
 
 
 ---
 
 ## Graduated (approved for order preview, not yet bought)
 
-**Orders placed 2026-06-08 (queued for Mon regular session):** NOW, SOXX, HOOD, MRVL, UBER @ $20 each. Move to Bought after fill; place stops immediately.
-
 | Approved | Ticker | Research summary | Target entry | Stop-loss |
 | -------- | ------ | ---------------- | ------------ | --------- |
-| Jun 8, 2026 | NOW | SaaS rebound; beat/raise Q1; AI Assist target $1.5B; ~47% off highs; diversifies from main book. | $20 market @ ~$112 | $103.25 |
-| Jun 8, 2026 | SOXX | Semi ETF with 8% single-name caps; broad AI/semi exposure without picking one memory name. | $20 market @ ~$546 | $502.50 |
-| Jun 8, 2026 | HOOD | Fintech diversifier; event contracts + options growing; crypto rev weak but not thesis-breaking. | $20 market @ ~$82 | $75.75 |
-| Jun 8, 2026 | MRVL | AI datacenter networking/custom silicon; record Q1 + raised FY27 guide; wait for regular session (avoid chasing pre-market pop). | $20 market @ ~$276 | $254.00 |
-| Jun 8, 2026 | UBER | Platform compounder near range low; bookings +21%, Q2 EPS guide +30%+; zero overlap with main/Roth. | $20 market @ ~$71 | $65.00 |
+| —        | —      | —                | —            | —         |
 
 
 ---
 
 ## Bought (open positions sourced through this workflow)
 
+**Note (2026-06-08):** All five positions filled as **fractional shares** at the open. Robinhood does **not** allow broker stop orders on fractional positions (`Invalid trigger for fractional order` via MCP). Soft stops below are monitored in `monitor.md`; market exit on stop breach requires agent + user approval.
 
-| Bought | Ticker | Shares | Entry price | Stop-loss | Thesis |
+| Bought | Ticker | Shares | Entry price | Soft stop | Thesis |
 | ------ | ------ | ------ | ----------- | --------- | ------ |
-| —      | —      | —      | —           | —         | —      |
+| Jun 8, 2026 | NOW | 0.179211 | $111.60 | **$103.25** | SaaS/AI workflow rebound; diversifies from main mega-cap tech. |
+| Jun 8, 2026 | SOXX | 0.035075 | $570.20 | **$502.50** | Broad semi ETF; capped single-name weights. |
+| Jun 8, 2026 | HOOD | 0.236322 | $84.63 | **$75.75** | Fintech; event contracts + options offset weak crypto. |
+| Jun 8, 2026 | MRVL | 0.069285 | $288.66 | **$254.00** | AI datacenter networking/custom silicon. |
+| Jun 8, 2026 | UBER | 0.284131 | $70.39 | **$65.00** | Platform compounder near range low; zero main-book overlap. |
 
 
 ---
